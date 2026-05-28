@@ -54,7 +54,8 @@ func (h *udpHandler) handleTCP(conn core.UDPConn, c net.Conn) {
 }
 
 func (h *udpHandler) fetchUDPInput(conn core.UDPConn, input net.PacketConn) {
-	buf := core.NewBytes(maxUdpPayloadSize)
+	useOversize := false
+	buf := core.NewBytes(core.BufSize)
 
 	defer func() {
 		h.Close(conn)
@@ -63,12 +64,21 @@ func (h *udpHandler) fetchUDPInput(conn core.UDPConn, input net.PacketConn) {
 
 	for {
 		input.SetDeadline(time.Now().Add(h.timeout))
+		// It's possible to optimise it further, postponing buffer
+		// allocation till the socket is readable. But go-tun2socks
+		// is archived as of May 2026, so we peek only low-hanging
+		// fruits from the pprof output at this moment.
 		n, _, err := input.ReadFrom(buf)
 		if err != nil {
 			return
 		}
 		if n < 3 {
 			continue
+		} else if n == core.BufSize && !useOversize {
+			core.FreeBytes(buf) // put 2KiB back in core.buffer_pool
+			buf = core.NewBytes(maxUdpPayloadSize)
+			useOversize = true
+			continue // yes, drop the very first jumbogram
 		}
 		addr := SplitAddr(buf[3:n])
 		if addr == nil {
