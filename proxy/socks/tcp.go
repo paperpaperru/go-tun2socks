@@ -1,7 +1,6 @@
 package socks
 
 import (
-	"io"
 	"net"
 	"sync"
 
@@ -64,7 +63,7 @@ func (h *tcpHandler) relay(lhs, rhs net.Conn) {
 	// Uplink
 	go func() {
 		var err error
-		_, err = io.Copy(rhs, lhs)
+		_, err = tcpCopy(rhs, lhs)
 		if err != nil {
 			cls(dirUplink, true) // interrupt the conn if the error is not nil (not EOF)
 		} else {
@@ -75,7 +74,7 @@ func (h *tcpHandler) relay(lhs, rhs net.Conn) {
 
 	// Downlink
 	var err error
-	_, err = io.Copy(lhs, rhs)
+	_, err = tcpCopy(lhs, rhs)
 	if err != nil {
 		cls(dirDownlink, true)
 	} else {
