@@ -53,6 +53,31 @@ func (h *udpHandler) handleTCP(conn core.UDPConn, c net.Conn) {
 	}
 }
 
+// clampTimeout reduces amount of pined memory, dropping certain UDP
+// connections early.
+//
+// Alternative would be to check if the UDP socket on the other side
+// of the connection still listens. E.g. send a zero-length UDP packet
+// and check if ICMP Port Unreachable comes as a reply or not.
+// Unfortunately, vendored lwIP does not process ICMP Unreachable packets.
+func clampTimeout(pkt []byte, port int, timeout time.Duration) time.Duration {
+	const epsilon time.Duration = 250 * time.Millisecond
+
+	// Looks like DNS. Questions=1, Answers<256, Auth<256, Additional<256
+	if port == 53 && len(pkt) >= 12 && pkt[4] == 0 && pkt[5] == 1 && pkt[6] == 0 && pkt[8] == 0 && pkt[10] == 0 {
+		// 5s is default RES_TIMEOUT
+		return min(5*time.Second+epsilon, timeout)
+	}
+
+	// Looks like NTP
+	if port == 123 && len(pkt) == 48 {
+		// 2s is default ntpdate retry time
+		return min(2*time.Second+epsilon, timeout)
+	}
+
+	return timeout
+}
+
 func (h *udpHandler) fetchUDPInput(conn core.UDPConn, input net.PacketConn) {
 	useOversize := false
 	buf := core.NewBytes(core.BufSize)
@@ -88,7 +113,9 @@ func (h *udpHandler) fetchUDPInput(conn core.UDPConn, input net.PacketConn) {
 		if err != nil {
 			continue
 		}
-		_, err = conn.WriteFrom(buf[int(3+len(addr)):n], resolvedAddr)
+		pkt := buf[int(3+len(addr)):n]
+		h.timeout = clampTimeout(pkt, resolvedAddr.Port, h.timeout)
+		_, err = conn.WriteFrom(pkt, resolvedAddr)
 		if err != nil {
 			log.Warnf("write local failed: %v", err)
 			return
